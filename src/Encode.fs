@@ -317,8 +317,9 @@ module Encode =
     let boxEncoder (d: Encoder<'T>): BoxedEncoder =
         EncoderCrate(d) :> BoxedEncoder
 
-    let unboxEncoder<'T> (d: BoxedEncoder): Encoder<'T> =
-        (d :?> EncoderCrate<'T>).UnboxedEncoder
+    let unboxEncoder<'T> (e: BoxedEncoder): Encoder<'T> =
+        // (e :?> EncoderCrate<'T>).UnboxedEncoder
+        fun (value: 'T) -> e.Encode value
 
     let private (|StringifiableType|_|) (t: System.Type): (obj->string) option =
         let fullName = t.FullName
@@ -369,8 +370,13 @@ module Encode =
 
     and private autoEncoder (extra: ExtraCoders) isCamelCase (t: System.Type) : BoxedEncoder =
       let fullname = t.FullName
-      match Map.tryFind fullname extra with
-      | Some(encoder,_) -> encoder
+      match extra |> List.tryFind (fun (condition,_) -> condition fullname) with
+      | Some(_,(encoderGenerator,_)) ->
+        if t.IsGenericType then
+            t.GenericTypeArguments
+            |> Array.map (autoEncoder extra isCamelCase)
+            |> encoderGenerator
+        else encoderGenerator [||]
       | None ->
         if t.IsArray then
             t.GetElementType() |> autoEncoder extra isCamelCase |> genericSeq
@@ -459,7 +465,7 @@ module Encode =
         static member generateEncoderCached(t: System.Type, ?isCamelCase : bool, ?extra: ExtraCoders): Encoder<obj> =
             Cache.Encoders.Value.GetOrAdd(t, fun t ->
                 let isCamelCase = defaultArg isCamelCase false
-                let extra = match extra with Some e -> e | None -> Map.empty
+                let extra = match extra with Some e -> e | None -> List.empty
                 autoEncoder extra isCamelCase t).BoxedEncoder
 
         static member generateEncoderCached<'T>(?isCamelCase : bool, ?extra: ExtraCoders): Encoder<'T> =
@@ -467,14 +473,14 @@ module Encode =
             let encoderCrate =
                 Cache.Encoders.Value.GetOrAdd(t, fun t ->
                     let isCamelCase = defaultArg isCamelCase false
-                    let extra = match extra with Some e -> e | None -> Map.empty
+                    let extra = match extra with Some e -> e | None -> List.empty
                     autoEncoder extra isCamelCase t)
             fun (value: 'T) ->
                 encoderCrate.Encode value
 
         static member generateEncoder<'T>(?isCamelCase : bool, ?extra: ExtraCoders): Encoder<'T> =
             let isCamelCase = defaultArg isCamelCase false
-            let extra = match extra with Some e -> e | None -> Map.empty
+            let extra = match extra with Some e -> e | None -> List.empty
             let encoderCrate = autoEncoder extra isCamelCase typeof<'T>
             fun (value: 'T) ->
                 encoderCrate.Encode value

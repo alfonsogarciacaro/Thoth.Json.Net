@@ -839,7 +839,11 @@ module Decode =
         DecoderCrate(d) :> BoxedDecoder
 
     let unboxDecoder<'T> (d: BoxedDecoder): Decoder<'T> =
-        (d :?> DecoderCrate<'T>).UnboxedDecoder
+        // (d :?> DecoderCrate<'T>).UnboxedDecoder
+        fun path token ->
+            match d.Decode(path, token) with
+            | Ok x -> Ok(x :?> 'T)
+            | Error er -> Error er
 
     let private autoObject (decoderInfos: (string * BoxedDecoder)[]) (path : string) (value: JsonValue) =
         if not (Helpers.isObject value) then
@@ -899,14 +903,14 @@ module Decode =
         else None
 
     let rec private genericMap extra isCamelCase (t: System.Type) =
-        let keyType   = t.GenericTypeArguments.[0]
+        let keyType = t.GenericTypeArguments.[0]
         let valueType = t.GenericTypeArguments.[1]
         let valueDecoder = autoDecoder extra isCamelCase false valueType
         let keyDecoder = autoDecoder extra isCamelCase false keyType
         let tupleType = typedefof<obj * obj>.MakeGenericType([|keyType; valueType|])
         let listType = typedefof< ResizeArray<obj> >.MakeGenericType([|tupleType|])
         let addMethod = listType.GetMethod("Add")
-        fun (path: string)  (value: JsonValue) ->
+        fun (path: string) (value: JsonValue) ->
             let empty = System.Activator.CreateInstance(listType)
             let kvs =
                 if Helpers.isArray value then
@@ -989,8 +993,13 @@ module Decode =
 
     and private autoDecoder (extra: ExtraCoders) isCamelCase (isOptional : bool) (t: System.Type) : BoxedDecoder =
       let fullname = t.FullName
-      match Map.tryFind fullname extra with
-      | Some(_,decoder) -> decoder
+      match extra |> List.tryFind (fun (condition,_) -> condition fullname) with
+      | Some(_,(_,decoderGenerator)) ->
+        if t.IsGenericType then
+            t.GenericTypeArguments
+            |> Array.map (autoDecoder extra isCamelCase false)
+            |> decoderGenerator
+        else decoderGenerator [||]
       | None ->
         if t.IsArray then
             let elemType = t.GetElementType()
@@ -1076,7 +1085,7 @@ module Decode =
             let decoderCrate =
                 Cache.Decoders.Value.GetOrAdd(t, fun t ->
                     let isCamelCase = defaultArg isCamelCase false
-                    let extra = match extra with Some e -> e | None -> Map.empty
+                    let extra = match extra with Some e -> e | None -> List.empty
                     autoDecoder extra isCamelCase false t)
             fun path token ->
                 match decoderCrate.Decode(path, token) with
@@ -1085,7 +1094,7 @@ module Decode =
 
         static member generateDecoder<'T> (?isCamelCase : bool, ?extra: ExtraCoders): Decoder<'T> =
             let isCamelCase = defaultArg isCamelCase false
-            let extra = match extra with Some e -> e | None -> Map.empty
+            let extra = match extra with Some e -> e | None -> List.empty
             let decoderCrate = autoDecoder extra isCamelCase false typeof<'T>
             fun path token ->
                 match decoderCrate.Decode(path, token) with

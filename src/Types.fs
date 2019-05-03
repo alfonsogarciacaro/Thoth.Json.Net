@@ -29,7 +29,7 @@ type BoxedEncoder() =
     abstract Encode: value: obj -> JsonValue
     member this.BoxedEncoder: Encoder<obj> = this.Encode
 
-type ExtraCoders = Map<string, BoxedEncoder * BoxedDecoder>
+type ExtraCoders = List<(string -> bool) * ((BoxedEncoder[]->BoxedEncoder) * (BoxedDecoder[]->BoxedDecoder))>
 
 module internal Cache =
     open System
